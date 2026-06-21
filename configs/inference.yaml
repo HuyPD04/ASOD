@@ -18,7 +18,7 @@ infer:
     - 5
     - 8
     - 9
-  device: "directml"
+  device: ""
   feature_layers:
     - 16
   use_cache: true

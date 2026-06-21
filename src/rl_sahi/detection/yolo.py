@@ -7,7 +7,7 @@ from ultralytics import YOLO
 
 from rl_sahi.common.cache import DetectionCache
 from rl_sahi.common.data import read_image_shape
-from rl_sahi.common.device import DeviceLike, configure_ultralytics_for_device, resolve_torch_device
+from rl_sahi.common.device import DeviceLike, configure_torch_runtime, configure_ultralytics_for_device
 from rl_sahi.detection.features import DetectAuxCollector, FeatureCollector
 
 
@@ -17,7 +17,7 @@ DEFAULT_SPATIAL_FEATURE_CHANNELS = 4
 
 def load_yolo(weights: Path, device: DeviceLike = None) -> YOLO:
     model = YOLO(str(weights))
-    resolved_device = resolve_torch_device(device)
+    resolved_device = configure_torch_runtime(device)
     configure_ultralytics_for_device(resolved_device)
     model.to(resolved_device)
     return model
@@ -36,7 +36,7 @@ def detect_one_image(
     spatial_feature_channels: int = DEFAULT_SPATIAL_FEATURE_CHANNELS,
 ) -> DetectionCache:
     image_shape = read_image_shape(image_path)
-    resolved_device = resolve_torch_device(device)
+    resolved_device = configure_torch_runtime(device)
     configure_ultralytics_for_device(resolved_device)
     with FeatureCollector(model, feature_layers) as collector, DetectAuxCollector(model) as aux_collector:
         collector.clear()
@@ -48,6 +48,7 @@ def detect_one_image(
             iou=iou,
             max_det=max_det,
             device=resolved_device,
+            half=resolved_device.type == "cuda",
             verbose=False,
         )
         feature = collector.vector()

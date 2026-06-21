@@ -24,22 +24,29 @@ def build_state_vector(
     objectness_map: np.ndarray,
     spatial_feature_map: np.ndarray,
     summary: np.ndarray,
+    static_ready: bool = False,
 ) -> np.ndarray:
-    objectness = np.nan_to_num(
-        np.asarray(objectness_map, dtype=np.float32),
-        nan=0.0,
-        posinf=0.0,
-        neginf=0.0,
-    )
-    spatial = np.nan_to_num(
-        np.asarray(spatial_feature_map, dtype=np.float32),
-        nan=0.0,
-        posinf=0.0,
-        neginf=0.0,
-    )
+    if static_ready:
+        feature_part = np.asarray(feature, dtype=np.float32).reshape(-1)
+        objectness = np.asarray(objectness_map, dtype=np.float32)
+        spatial = np.asarray(spatial_feature_map, dtype=np.float32)
+    else:
+        feature_part = normalize_feature(feature)
+        objectness = np.nan_to_num(
+            np.asarray(objectness_map, dtype=np.float32),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        spatial = np.nan_to_num(
+            np.asarray(spatial_feature_map, dtype=np.float32),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
     return np.concatenate(
         [
-            normalize_feature(feature),
+            feature_part,
             np.asarray(history, dtype=np.float32).reshape(-1),
             np.asarray(current_roi_map, dtype=np.float32).reshape(-1),
             np.asarray(attempted_slice_map, dtype=np.float32).reshape(-1),

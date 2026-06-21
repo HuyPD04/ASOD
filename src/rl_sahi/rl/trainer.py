@@ -14,7 +14,7 @@ from rl_sahi.common.actions import Action
 from rl_sahi.common.boxes import area, as_boxes, intersection_matrix
 from rl_sahi.common.class_mapping import ClassMapping
 from rl_sahi.common.data import iter_images
-from rl_sahi.common.device import resolve_torch_device
+from rl_sahi.common.device import configure_torch_runtime
 from rl_sahi.detection.yolo import load_yolo
 from rl_sahi.eval.benchmark import BenchmarkConfig, evaluate_rl_sahi_policy
 from rl_sahi.inference.config import InferenceConfig
@@ -495,7 +495,7 @@ def train_dqn(
     if layout.state_dim != state_dim:
         raise ValueError(f"State layout mismatch: layout has {layout.state_dim}, env produced {state_dim}")
 
-    device = resolve_torch_device(device_name)
+    device = configure_torch_runtime(device_name)
     policy = QNetwork(
         state_dim,
         hidden_dim=cfg.hidden_dim,
@@ -690,10 +690,9 @@ def train_dqn(
                         )
                         if loss is not None:
                             losses.append(loss)
-
-                    if cfg.use_soft_update:
-                        soft_update(policy, target_net, cfg.tau)
-                    elif global_step % cfg.target_update == 0:
+                            if cfg.use_soft_update:
+                                soft_update(policy, target_net, cfg.tau)
+                    if not cfg.use_soft_update and global_step % cfg.target_update == 0:
                         target_net.load_state_dict(policy.state_dict())
 
                     if result.done:

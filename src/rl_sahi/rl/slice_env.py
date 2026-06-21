@@ -20,7 +20,7 @@ from rl_sahi.rl.env_config import EnvConfig, StepResult
 from rl_sahi.rl.state_config import StateConfig
 from rl_sahi.rl.state_maps import build_detection_map, mark_history, proposal_mask, proposal_quality
 from rl_sahi.rl.state_summary import detection_summary
-from rl_sahi.rl.state_vector import build_state_vector
+from rl_sahi.rl.state_vector import build_state_vector, normalize_feature
 
 
 class SliceEnv:
@@ -45,6 +45,19 @@ class SliceEnv:
         self.image_shape = detection.image_shape
         self.det_boxes, self.det_scores, self.det_classes = self._filtered_detections()
         self.detection_map = build_detection_map(self.det_boxes, self.det_scores, self.image_shape, self.state_cfg)
+        self.feature_state = normalize_feature(self.detection.feature)
+        self.objectness_state = np.nan_to_num(
+            np.asarray(self.detection.objectness_map, dtype=np.float32),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        self.spatial_feature_state = np.nan_to_num(
+            np.asarray(self.detection.spatial_feature_map, dtype=np.float32),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
         self.hard_boxes = as_boxes(hard_regions.hard_boxes if hard_regions is not None else np.zeros((0, 4)))
         self.previous_rois = as_boxes(previous_rois if previous_rois is not None else np.zeros((0, 4), dtype=np.float32))
         self.overlap_rois = as_boxes(overlap_rois if overlap_rois is not None else self.previous_rois)
@@ -573,15 +586,16 @@ class SliceEnv:
             cfg=self.state_cfg,
         )
         return build_state_vector(
-            self.detection.feature,
+            self.feature_state,
             self.history,
             self._current_roi_map(),
             self.attempted_slice_map,
             self.accepted_slice_map,
             self.detection_map,
-            self.detection.objectness_map,
-            self.detection.spatial_feature_map,
+            self.objectness_state,
+            self.spatial_feature_state,
             summary,
+            static_ready=True,
         )
 
     def _update_covered(self, commit: bool = True) -> tuple[np.ndarray, np.ndarray]:

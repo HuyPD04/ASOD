@@ -47,6 +47,22 @@ def resolve_torch_device(device: DeviceLike = None) -> torch.device:
     return torch.device("cpu")
 
 
+def configure_torch_runtime(device: DeviceLike = None) -> torch.device:
+    resolved = resolve_torch_device(device)
+    if resolved.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+        try:
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        except Exception:
+            pass
+        try:
+            torch.set_float32_matmul_precision("high")
+        except Exception:
+            pass
+    return resolved
+
+
 def is_directml_device(device: DeviceLike) -> bool:
     resolved = resolve_torch_device(device)
     return resolved.type == "privateuseone"

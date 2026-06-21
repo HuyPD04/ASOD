@@ -18,7 +18,7 @@ infer:
     - 5
     - 8
     - 9
-  device: ""
+  device: "cuda"
   feature_layers:
     - 16
   use_cache: true

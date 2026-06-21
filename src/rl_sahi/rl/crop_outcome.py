@@ -13,7 +13,7 @@ from rl_sahi.common.boxes import iou_matrix
 from rl_sahi.common.cache import DetectionCache
 from rl_sahi.common.data import image_id, image_to_label_path, read_yolo_labels
 from rl_sahi.inference.config import InferenceConfig
-from rl_sahi.inference.crops import run_yolo_on_crop
+from rl_sahi.inference.crops import run_yolo_on_crops
 from rl_sahi.inference.merge import (
     merge_predictions,
     new_detection_gain_after_merge,
@@ -132,6 +132,37 @@ class CropOutcomeEvaluator:
     ) -> CropOutcome:
         image_path = self._resolve_image_path(image_path)
         raw_boxes, raw_scores, raw_classes = self._crop_predictions(image_path, roi)
+        return self.evaluate_from_predictions(
+            image_path=image_path,
+            det=det,
+            full_boxes=full_boxes,
+            full_scores=full_scores,
+            full_classes=full_classes,
+            slice_boxes_parts=slice_boxes_parts,
+            slice_scores_parts=slice_scores_parts,
+            slice_classes_parts=slice_classes_parts,
+            accepted_new_count=accepted_new_count,
+            raw_boxes=raw_boxes,
+            raw_scores=raw_scores,
+            raw_classes=raw_classes,
+        )
+
+    def evaluate_from_predictions(
+        self,
+        image_path: Path | str,
+        det: DetectionCache,
+        full_boxes: np.ndarray,
+        full_scores: np.ndarray,
+        full_classes: np.ndarray,
+        slice_boxes_parts: list[np.ndarray],
+        slice_scores_parts: list[np.ndarray],
+        slice_classes_parts: list[np.ndarray],
+        accepted_new_count: int,
+        raw_boxes: np.ndarray,
+        raw_scores: np.ndarray,
+        raw_classes: np.ndarray,
+    ) -> CropOutcome:
+        image_path = self._resolve_image_path(image_path)
         classes = self.cfg.class_mapping.map_model_classes(raw_classes)
         boxes, scores, classes = self._filter_classes(raw_boxes, raw_scores, classes)
         new_detection_gain = new_detection_gain_after_merge(
@@ -218,25 +249,64 @@ class CropOutcomeEvaluator:
         return path
 
     def _crop_predictions(self, image_path: Path, roi: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        metadata = self._metadata(image_path, roi)
-        path = self._cache_path(image_path, metadata)
-        if self.use_cache and path.exists():
-            loaded = self._load_cache(path, metadata)
-            if loaded is not None:
-                return loaded
-        boxes, scores, classes = run_yolo_on_crop(
-            self.model,
-            image_path,
-            roi,
-            imgsz=self.cfg.slice_imgsz,
-            conf=self.cfg.output_conf,
-            iou=self.cfg.iou,
-            max_det=self.cfg.max_det,
-            device=self.cfg.device,
+        return self.crop_predictions_many([image_path], [roi])[0]
+
+    def crop_predictions_many(
+        self,
+        image_paths: list[Path | str],
+        rois: list[np.ndarray],
+    ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        if len(image_paths) != len(rois):
+            raise ValueError("image_paths and rois must have the same length")
+        outputs: list[tuple[np.ndarray, np.ndarray, np.ndarray] | None] = [None] * len(image_paths)
+        missing_indices: list[int] = []
+        missing_paths: list[Path] = []
+        missing_rois: list[np.ndarray] = []
+        missing_cache_paths: list[Path] = []
+        missing_metadata: list[dict[str, Any]] = []
+        for index, (image_path, roi) in enumerate(zip(image_paths, rois)):
+            resolved_path = self._resolve_image_path(image_path)
+            metadata = self._metadata(resolved_path, roi)
+            path = self._cache_path(resolved_path, metadata)
+            if self.use_cache and path.exists():
+                loaded = self._load_cache(path, metadata)
+                if loaded is not None:
+                    outputs[index] = loaded
+                    continue
+            missing_indices.append(index)
+            missing_paths.append(resolved_path)
+            missing_rois.append(np.asarray(roi, dtype=np.float32).reshape(4))
+            missing_cache_paths.append(path)
+            missing_metadata.append(metadata)
+
+        if missing_indices:
+            predictions = run_yolo_on_crops(
+                self.model,
+                missing_paths,
+                missing_rois,
+                imgsz=self.cfg.slice_imgsz,
+                conf=self.cfg.output_conf,
+                iou=self.cfg.iou,
+                max_det=self.cfg.max_det,
+                device=self.cfg.device,
+            )
+            for index, path, metadata, prediction in zip(
+                missing_indices,
+                missing_cache_paths,
+                missing_metadata,
+                predictions,
+            ):
+                boxes, scores, classes = prediction
+                if self.use_cache:
+                    self._save_cache(path, metadata, boxes, scores, classes)
+                outputs[index] = prediction
+
+        empty = (
+            np.zeros((0, 4), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
         )
-        if self.use_cache:
-            self._save_cache(path, metadata, boxes, scores, classes)
-        return boxes, scores, classes
+        return [item if item is not None else empty for item in outputs]
 
     def _tp_fp_gain(
         self,

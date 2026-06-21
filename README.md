@@ -41,7 +41,7 @@ Benchmark outputs are stored in:
 - Ultralytics YOLO11
 - OpenCV
 - NumPy
-- Torch-DirectML
+- CUDA-capable PyTorch
 - PyYAML
 
 ## Repository Layout
@@ -74,14 +74,16 @@ conda activate rl-sahi
 pip install -r requirements.txt
 ```
 
-The default inference config uses DirectML:
+The default config targets CUDA, which is the expected backend for Kaggle T4:
 
 ```yaml
 infer:
-  device: "directml"
+  device: "cuda"
+train:
+  device: "cuda"
 ```
 
-If DirectML is not available, set the device in `configs/inference.yaml` to `""` for auto selection, or to a valid PyTorch device such as `cuda` or `cpu`.
+For a local non-CUDA machine, set the device values in `configs/detection.yaml`, `configs/inference.yaml`, and `configs/rl.yaml` to `""` for auto selection or to a valid PyTorch device such as `cpu`.
 
 ## Data Layout
 
@@ -123,7 +125,7 @@ python scripts\hard_region.py --split train
 python scripts\hard_region.py --split val
 ```
 
-3. Train the RL slicing policy:
+3. Train the RL slicing policy with the batched trainer:
 
 ```powershell
 python scripts\train.py --split train

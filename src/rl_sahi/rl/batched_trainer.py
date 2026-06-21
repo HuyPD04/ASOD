@@ -13,7 +13,7 @@ from rl_sahi.common.actions import Action
 from rl_sahi.common.boxes import as_boxes
 from rl_sahi.common.class_mapping import ClassMapping
 from rl_sahi.common.data import iter_images
-from rl_sahi.common.device import resolve_torch_device
+from rl_sahi.common.device import configure_torch_runtime
 from rl_sahi.detection.yolo import load_yolo
 from rl_sahi.eval.benchmark import BenchmarkConfig, evaluate_rl_sahi_policy
 from rl_sahi.inference.config import InferenceConfig
@@ -32,7 +32,6 @@ from rl_sahi.rl.trainer import (
     _max_slice_attempts,
     _stack_rois,
     _terminal_reward_with_crop_outcome,
-    apply_terminal_crop_outcome,
     benchmark_score,
     epsilon_by_step,
     evaluate_policy,
@@ -130,7 +129,7 @@ def batched_train_dqn(
     state_dim = int(probe_env.reset().shape[0])
     layout = state_layout_from_detection(probe_det, state_cfg)
 
-    device = resolve_torch_device(device_name)
+    device = configure_torch_runtime(device_name)
     policy = QNetwork(state_dim, hidden_dim=cfg.hidden_dim, layout=layout, use_spatial_cnn=cfg.use_spatial_cnn, dueling=cfg.dueling).to(device)
     target_net = QNetwork(state_dim, hidden_dim=cfg.hidden_dim, layout=layout, use_spatial_cnn=cfg.use_spatial_cnn, dueling=cfg.dueling).to(device)
     target_net.load_state_dict(policy.state_dict())
@@ -245,6 +244,7 @@ def batched_train_dqn(
 
         while active_workers:
             states = [w.state for w in active_workers]
+            valid_masks = [w.env.valid_actions() for w in active_workers]
             epsilons = [epsilon_by_step(global_step, cfg)] * len(active_workers)
             guide_probs = [guide_prob_by_step(global_step, cfg)] * len(active_workers)
             
@@ -252,12 +252,13 @@ def batched_train_dqn(
             nn_indices = []
             
             for i, w in enumerate(active_workers):
-                valid_actions = np.flatnonzero(w.env.valid_actions())
+                valid_mask = valid_masks[i]
+                valid_actions = np.flatnonzero(valid_mask)
                 if len(valid_actions) == 0:
                     valid_actions = np.asarray([int(Action.STOP)], dtype=np.int64)
                 if random.random() < guide_probs[i]:
                     action = w.env.guided_action()
-                    if int(action) in set(int(x) for x in valid_actions):
+                    if int(action) < len(valid_mask) and bool(valid_mask[int(action)]):
                         actions[i] = action
                         continue
                 if random.random() < epsilons[i]:
@@ -271,37 +272,60 @@ def batched_train_dqn(
                     x = torch.from_numpy(batch_states).float().to(device)
                     q = policy(x)
                     for j, i in enumerate(nn_indices):
-                        valid = torch.from_numpy(active_workers[i].env.valid_actions()).bool().to(device)
+                        valid = torch.from_numpy(valid_masks[i]).bool().to(device)
                         q[j, ~valid] = -torch.inf
                         actions[i] = Action(int(q[j].argmax().item()))
                         
+            step_results = []
+            terminal_outcomes: list[CropOutcome | None] = [None] * len(active_workers)
+            crop_indices: list[int] = []
+            crop_paths = []
+            crop_rois = []
+            for i, w in enumerate(active_workers):
+                result = w.env.step(actions[i])
+                step_results.append(result)
+                if (
+                    result.done
+                    and crop_evaluator is not None
+                    and not crop_evaluator.should_skip_terminal(result.info)
+                ):
+                    crop_indices.append(i)
+                    crop_paths.append(w.det.image_path)
+                    crop_rois.append(w.env.roi.copy())
+
+            if crop_indices and crop_evaluator is not None:
+                crop_predictions = crop_evaluator.crop_predictions_many(crop_paths, crop_rois)
+                for i, (raw_boxes, raw_scores, raw_classes) in zip(crop_indices, crop_predictions):
+                    w = active_workers[i]
+                    outcome = crop_evaluator.evaluate_from_predictions(
+                        image_path=w.det.image_path,
+                        det=w.det,
+                        full_boxes=w.full_boxes,
+                        full_scores=w.full_scores,
+                        full_classes=w.full_classes,
+                        slice_boxes_parts=w.slice_boxes_all,
+                        slice_scores_parts=w.slice_scores_all,
+                        slice_classes_parts=w.slice_classes_all,
+                        accepted_new_count=w.accepted_new_count,
+                        raw_boxes=raw_boxes,
+                        raw_scores=raw_scores,
+                        raw_classes=raw_classes,
+                    )
+                    step_results[i].info.update(outcome.info())
+                    terminal_outcomes[i] = outcome
+
             for i in range(len(active_workers)):
                 w = active_workers[i]
                 action = actions[i]
-                result = w.env.step(action)
-                terminal_outcome: CropOutcome | None = None
-                if result.done:
-                    terminal_outcome = apply_terminal_crop_outcome(
-                        crop_evaluator,
-                        w.det.image_path,
-                        w.det,
-                        w.env,
-                        result.info,
-                        w.full_boxes,
-                        w.full_scores,
-                        w.full_classes,
-                        w.slice_boxes_all,
-                        w.slice_scores_all,
-                        w.slice_classes_all,
-                        w.accepted_new_count,
-                    )
-                    if terminal_outcome is not None:
-                        result.reward = _terminal_reward_with_crop_outcome(result.reward, terminal_outcome)
-                        w.crop_new_detection_gain_total += int(terminal_outcome.new_detection_gain)
-                        w.crop_new_detection_utility_total += float(terminal_outcome.new_detection_utility)
-                        w.crop_tp_gain_total += int(terminal_outcome.tp_gain)
-                        w.crop_fp_gain_total += int(terminal_outcome.fp_gain)
-                        w.crop_outcome_reward_total += float(terminal_outcome.reward)
+                result = step_results[i]
+                terminal_outcome = terminal_outcomes[i]
+                if result.done and terminal_outcome is not None:
+                    result.reward = _terminal_reward_with_crop_outcome(result.reward, terminal_outcome)
+                    w.crop_new_detection_gain_total += int(terminal_outcome.new_detection_gain)
+                    w.crop_new_detection_utility_total += float(terminal_outcome.new_detection_utility)
+                    w.crop_tp_gain_total += int(terminal_outcome.tp_gain)
+                    w.crop_fp_gain_total += int(terminal_outcome.fp_gain)
+                    w.crop_outcome_reward_total += float(terminal_outcome.reward)
                 next_valid_actions = w.env.valid_actions().copy()
 
                 w.n_step_buffer.append((w.state, action, result.reward, result.state, result.done, next_valid_actions))
@@ -325,10 +349,9 @@ def batched_train_dqn(
                     loss = optimize(policy, target_net, optimizer, replay, cfg.batch_size, cfg.gamma ** getattr(cfg, "n_step", 1), device, double_dqn=cfg.double_dqn, reward_clip=cfg.reward_clip)
                     if loss is not None:
                         w.losses.append(loss)
-                        
-                if cfg.use_soft_update:
-                    soft_update(policy, target_net, cfg.tau)
-                elif global_step % cfg.target_update == 0:
+                        if cfg.use_soft_update:
+                            soft_update(policy, target_net, cfg.tau)
+                if not cfg.use_soft_update and global_step % cfg.target_update == 0:
                     target_net.load_state_dict(policy.state_dict())
                     
                 if result.done:

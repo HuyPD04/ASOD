@@ -15,7 +15,7 @@ from rl_sahi.eval.benchmark import BenchmarkConfig
 from rl_sahi.inference.config import InferenceConfig
 from rl_sahi.rl.env_config import EnvConfig
 from rl_sahi.rl.state_config import StateConfig
-from rl_sahi.rl.trainer import TrainConfig, train_dqn
+from rl_sahi.rl.trainer import TrainConfig
 from rl_sahi.rl.batched_trainer import batched_train_dqn
 
 def _int_tuple(value) -> tuple[int, ...]:
@@ -56,8 +56,7 @@ def main() -> None:
     device_name = args.device or cfg.optional_str("train", "device")
     print_device_info("train", device_name)
 
-    train_fn = batched_train_dqn if train_cfg.num_envs > 1 else train_dqn
-    checkpoint = train_fn(
+    checkpoint = batched_train_dqn(
         image_root=cfg.path_value("image_root"),
         cache_root=cfg.path_value("cache_root"),
         split=args.split,

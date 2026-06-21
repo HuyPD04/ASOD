@@ -137,6 +137,18 @@ The default checkpoint path is:
 runs/dqn/best.pt
 ```
 
+Training also writes a resume checkpoint to:
+
+```text
+runs/dqn/resume.pt
+```
+
+If training is interrupted, rerun the same train command to continue from the last saved resume checkpoint. To start a fresh run instead, pass:
+
+```powershell
+python scripts\train.py --split train --no-resume
+```
+
 4. Run inference on a split:
 
 ```powershell

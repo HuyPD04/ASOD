@@ -63,6 +63,8 @@ class TrainConfig:
     eval_map_weight: float = 1.0
     eval_small_recall_weight: float = 1.5
     eval_fp_cost_weight: float = 0.01
+    resume: bool = True
+    resume_interval: int = 25
     use_soft_update: bool = True
     tau: float = 0.005
     use_per: bool = True
@@ -539,6 +541,7 @@ def train_dqn(
     best_score = -float("inf")
     best_reward = -float("inf")
     global_step = 0
+    optimizer_steps = 0
     with log_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
@@ -689,6 +692,7 @@ def train_dqn(
                             reward_clip=cfg.reward_clip,
                         )
                         if loss is not None:
+                            optimizer_steps += 1
                             losses.append(loss)
                             if cfg.use_soft_update:
                                 soft_update(policy, target_net, cfg.tau)
@@ -738,7 +742,8 @@ def train_dqn(
                 if previous_covered.all() and len(previous_covered) > 0:
                     break
 
-            scheduler.step()
+            if optimizer_steps > 0:
+                scheduler.step()
 
             mean_loss = float(np.mean(losses)) if losses else 0.0
             row = {

@@ -31,6 +31,7 @@ def main() -> None:
     parser.add_argument("--episodes", type=int, default=None)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=None)
     args = parser.parse_args()
 
     cfg = load_default_config(args.config, ROOT)
@@ -53,6 +54,8 @@ def main() -> None:
     class_mapping = ClassMapping.from_config(cfg.section("classes"))
     if args.episodes is not None:
         train_cfg.episodes = args.episodes
+    if args.resume is not None:
+        train_cfg.resume = bool(args.resume)
     device_name = args.device or cfg.optional_str("train", "device")
     print_device_info("train", device_name)
 

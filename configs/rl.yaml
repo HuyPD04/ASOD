@@ -86,7 +86,7 @@ train:
   eval_small_recall_weight: 1.5
   eval_fp_cost_weight: 0.01
   device: "cuda"
-  resume: false
+  resume: true
   resume_interval: 25
   use_soft_update: true
   tau: 0.005
